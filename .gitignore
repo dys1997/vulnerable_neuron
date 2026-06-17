@@ -15,3 +15,11 @@
 !02_vulnerality/scripts/**
 
 02_vulnerality/scripts/*.bak*
+
+!03_stability_test/
+!03_stability_test/Snakefile
+!03_stability_test/scripts/
+!03_stability_test/scripts/**
+
+03_stability_test/scripts/*.bak*
+03_stability_test/results/

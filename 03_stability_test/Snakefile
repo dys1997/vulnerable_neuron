@@ -1,0 +1,367 @@
+# ============================================================
+# Snakefile for vulnerable neuron stability analysis
+# plus barcode-level stable vulnerable / non-vulnerable PV states
+# ============================================================
+
+
+# -----------------------------
+# Input datasets
+# -----------------------------
+filespath = [
+    "FTLD_PFC_Ctrl_Concat_QC_harmony_filted",
+    "FTLD_MCX_Control_Concat_QC_harmony_filted",
+    "SALS_PFC_control_concat_QC_harmony",
+    "SALS_MCX_control_concat_QC_harmony"
+]
+
+
+# -----------------------------
+# Base paths
+# -----------------------------
+OUTDIR_BASE = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/results"
+INPUT_BASE = "/root/autodl-tmp/jupyter/prepare/harmony"
+
+VGLM_DIR = "/root/autodl-tmp/jupyter/vulnerable_neurons/"
+PYTHON = "/mnt/workspace/tools/envs/pysodb/bin/python"
+R_SCRIPT = "/mnt/workspace/tools/envs/r-base2/bin/Rscript"
+
+
+# -----------------------------
+# Scripts
+# -----------------------------
+RUN_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/run_vulnerability_both_In_Ex.py"
+
+SUMMARY_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/summarize_region_stable_subtypes.py"
+
+STRUCTURE_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/analyze_stable_subtype_structure.py"
+
+KMIN_HEATMAP_GGPLOT_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/plot_kmin_heatmap_stability_ggplot2.R"
+
+MAINHIT_BLOCKS_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/plot_main_hit_composition_ggplot2.R"
+
+# New script: barcode-level PV stable state detection
+PV_CELLSTATE_SCRIPT = "/root/autodl-tmp/jupyter/vulnerable_neurons/03_stability_test/scripts/identify_pv_cellstate_stability_from_in_analysis.py"
+
+
+# -----------------------------
+# Output directories
+# -----------------------------
+FINAL_SUMMARY_DIR = f"{OUTDIR_BASE}/final_stable_summary"
+STRUCTURE_OUTDIR = f"{OUTDIR_BASE}/final_stable_structure"
+KMIN_HEATMAP_GGPLOT_OUTDIR = f"{FINAL_SUMMARY_DIR}/kmin_heatmap_ggplot2_version"
+MAINHIT_BLOCKS_OUTDIR = f"{OUTDIR_BASE}/mainhit_by_stable_class_blocks"
+
+
+# ============================================================
+# Final targets
+# ============================================================
+rule all:
+    input:
+        # ----------------------------------------------------
+        # kmin heatmap
+        # ----------------------------------------------------
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+
+        # ----------------------------------------------------
+        # main-hit composition by stable class blocks
+        # ----------------------------------------------------
+        f"{MAINHIT_BLOCKS_OUTDIR}/In_Ex_mainhit_composition_by_stable_class_blocks_cleanlegend_usedonly.png",
+        f"{MAINHIT_BLOCKS_OUTDIR}/In_Ex_mainhit_composition_by_stable_class_blocks_cleanlegend_usedonly.pdf",
+
+        # ----------------------------------------------------
+        # PV barcode-level stable vulnerable / non-vulnerable states
+        # ----------------------------------------------------
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_stable_state.tsv", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction.tsv", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_vulnerable_barcodes.txt", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_nonvulnerable_barcodes.txt", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_intermediate_barcodes.txt", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_state_composition_by_Org_celltype.tsv", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_original_subtype_cellstate_summary.tsv", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction_histogram.png", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_stable_state.png", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_hit_fraction.png", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_Org_celltype.png", rep=filespath)
+
+
+# ============================================================
+# 1. Run vulnerability analysis for each dataset
+#    This generates In/Ex analysis input, all_results.pkl,
+#    and subtype-level vulnerability summary tables.
+# ============================================================
+rule run_vulnerability:
+    input:
+        h5ad = f"{INPUT_BASE}" + "/{rep}.h5ad"
+    output:
+        in_rank = f"{OUTDIR_BASE}" + "/{rep}/In_all_subtypes_vulnerability_rank.tsv",
+        ex_rank = f"{OUTDIR_BASE}" + "/{rep}/Ex_all_subtypes_vulnerability_rank.tsv",
+
+        in_summary = f"{OUTDIR_BASE}" + "/{rep}/In_all_subtypes_vulnerability_kmin_summary.tsv",
+        ex_summary = f"{OUTDIR_BASE}" + "/{rep}/Ex_all_subtypes_vulnerability_kmin_summary.tsv",
+
+        in_h5ad = f"{OUTDIR_BASE}" + "/{rep}/In_analysis_input.h5ad",
+        ex_h5ad = f"{OUTDIR_BASE}" + "/{rep}/Ex_analysis_input.h5ad",
+
+        in_pkl = f"{OUTDIR_BASE}" + "/{rep}/In_all_results.pkl",
+        ex_pkl = f"{OUTDIR_BASE}" + "/{rep}/Ex_all_results.pkl"
+    params:
+        outdir = f"{OUTDIR_BASE}" + "/{rep}",
+        vglm_dir = VGLM_DIR
+    log:
+        f"{OUTDIR_BASE}/{{rep}}/run_vulnerability.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {PYTHON} {RUN_SCRIPT} \
+            --input {input.h5ad} \
+            --outdir {params.outdir} \
+            --vglm-dir {params.vglm_dir} > {log} 2>&1
+        """
+
+
+# ============================================================
+# 2. NEW: Identify barcode-level stable vulnerable /
+#         stable non-vulnerable PV cells
+#
+# Input:
+#   {rep}/In_analysis_input.h5ad
+#
+# Important:
+#   This rule does NOT use Org_celltype as the only boundary.
+#   It calculates, for each PV barcode, how often it falls
+#   into vulnerable hit clusters across k_min.
+# ============================================================
+rule identify_pv_cellstate_stability:
+    input:
+        in_h5ad = f"{OUTDIR_BASE}" + "/{rep}/In_analysis_input.h5ad"
+    output:
+        cell_hit = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_cell_hit_fraction.tsv",
+        cell_state = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_cell_stable_state.tsv",
+
+        stable_vuln = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_stable_vulnerable_barcodes.txt",
+        stable_nonvuln = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_stable_nonvulnerable_barcodes.txt",
+        intermediate = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_intermediate_barcodes.txt",
+
+        composition = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_stable_state_composition_by_Org_celltype.tsv",
+        subtype_summary = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_original_subtype_cellstate_summary.tsv",
+
+        kmin_hit = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_kmin_chosen_hit_clusters.tsv",
+        long_matrix = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_cell_kmin_hit_matrix_long.tsv",
+
+        hist = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_cell_hit_fraction_histogram.png",
+        umap_state = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_umap_stable_state.png",
+        umap_hit = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_umap_hit_fraction.png",
+        umap_org = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/PV_umap_Org_celltype.png",
+
+        h5ad = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability/In_analysis_with_PV_cellstate_stability.h5ad"
+    params:
+        outdir = f"{OUTDIR_BASE}" + "/{rep}/PV_cellstate_stability",
+        vglm_dir = VGLM_DIR
+    log:
+        f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/identify_pv_cellstate_stability.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {PYTHON} {PV_CELLSTATE_SCRIPT} \
+            --in-h5ad {input.in_h5ad} \
+            --outdir {params.outdir} \
+            --vglm-dir {params.vglm_dir} \
+            --org-col Org_celltype \
+            --donor-col Donor_ID \
+            --status-col SampleStatus \
+            --sample-col Sample_ID \
+            --control-label control \
+            --pv-prefix In.PV. \
+            --use-rep X_pca_harmony \
+            --k-min-start 2 \
+            --k-min-end 24 \
+            --k-max 32 \
+            --p-cut 0.05 \
+            --random-state 666 \
+            --covariate-cols Sex DevoStage \
+            --stable-vulnerable-cutoff 0.8 \
+            --stable-nonvulnerable-cutoff 0.1 \
+            --min-observed-kmin 10 > {log} 2>&1
+        """
+
+
+# ============================================================
+# 3. Summarize stable subtypes across four datasets
+# ============================================================
+rule summarize_stable_subtypes:
+    input:
+        expand(f"{OUTDIR_BASE}/{{rep}}/In_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath),
+        expand(f"{OUTDIR_BASE}/{{rep}}/Ex_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath)
+    output:
+        f"{FINAL_SUMMARY_DIR}/In_rep_level_summary.tsv",
+        f"{FINAL_SUMMARY_DIR}/In_region_level_summary.tsv",
+        f"{FINAL_SUMMARY_DIR}/In_stable_classification.tsv",
+        f"{FINAL_SUMMARY_DIR}/MCX_stable_In.tsv",
+        f"{FINAL_SUMMARY_DIR}/PFC_stable_In.tsv",
+        f"{FINAL_SUMMARY_DIR}/Cross_region_stable_In.tsv",
+        f"{FINAL_SUMMARY_DIR}/In_stable_summary.txt",
+        f"{FINAL_SUMMARY_DIR}/In_region_stable_heatmap.png",
+        f"{FINAL_SUMMARY_DIR}/In_region_stable_bubble.png",
+
+        f"{FINAL_SUMMARY_DIR}/Ex_rep_level_summary.tsv",
+        f"{FINAL_SUMMARY_DIR}/Ex_region_level_summary.tsv",
+        f"{FINAL_SUMMARY_DIR}/Ex_stable_classification.tsv",
+        f"{FINAL_SUMMARY_DIR}/MCX_stable_Ex.tsv",
+        f"{FINAL_SUMMARY_DIR}/PFC_stable_Ex.tsv",
+        f"{FINAL_SUMMARY_DIR}/Cross_region_stable_Ex.tsv",
+        f"{FINAL_SUMMARY_DIR}/Ex_stable_summary.txt",
+        f"{FINAL_SUMMARY_DIR}/Ex_region_stable_heatmap.png",
+        f"{FINAL_SUMMARY_DIR}/Ex_region_stable_bubble.png"
+    params:
+        outdir_base = OUTDIR_BASE,
+        outdir = FINAL_SUMMARY_DIR,
+        reps = " ".join(filespath)
+    log:
+        f"{FINAL_SUMMARY_DIR}/summarize_stable_subtypes.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {PYTHON} {SUMMARY_SCRIPT} \
+            --outdir-base {params.outdir_base} \
+            --outdir {params.outdir} \
+            --reps {params.reps} \
+            --capture-threshold 50 \
+            --min-prop 0.5 \
+            --max-threshold 70 > {log} 2>&1
+        """
+
+
+# ============================================================
+# 4. Analyze stable subtype hit-cluster structure
+# ============================================================
+rule analyze_stable_subtype_structure:
+    input:
+        in_stable = f"{FINAL_SUMMARY_DIR}/In_stable_classification.tsv",
+        ex_stable = f"{FINAL_SUMMARY_DIR}/Ex_stable_classification.tsv",
+
+        in_pkls = expand(f"{OUTDIR_BASE}/{{rep}}/In_all_results.pkl", rep=filespath),
+        ex_pkls = expand(f"{OUTDIR_BASE}/{{rep}}/Ex_all_results.pkl", rep=filespath),
+
+        in_h5ad = expand(f"{OUTDIR_BASE}/{{rep}}/In_analysis_input.h5ad", rep=filespath),
+        ex_h5ad = expand(f"{OUTDIR_BASE}/{{rep}}/Ex_analysis_input.h5ad", rep=filespath),
+
+        in_summary = expand(f"{OUTDIR_BASE}/{{rep}}/In_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath),
+        ex_summary = expand(f"{OUTDIR_BASE}/{{rep}}/Ex_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath)
+    output:
+        f"{STRUCTURE_OUTDIR}/stable_subtype_kmin_structure.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_subtype_cluster_composition.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_hit_cluster_summary.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_subtype_partner_detail.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_subtype_partner_summary.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_subtype_structure_consensus_rep.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_subtype_structure_consensus_region.tsv"
+    params:
+        outdir_base = OUTDIR_BASE,
+        final_summary_dir = FINAL_SUMMARY_DIR,
+        outdir = STRUCTURE_OUTDIR,
+        reps = " ".join(filespath)
+    log:
+        f"{STRUCTURE_OUTDIR}/analyze_stable_subtype_structure.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {PYTHON} {STRUCTURE_SCRIPT} \
+            --outdir-base {params.outdir_base} \
+            --final-summary-dir {params.final_summary_dir} \
+            --outdir {params.outdir} \
+            --reps {params.reps} \
+            --org-col Org_celltype \
+            --use-rep X_pca_harmony \
+            --p-cut 0.05 \
+            --call-by p \
+            --purity-cutoff 70 \
+            --random-state 666 \
+            --in-prefix In \
+            --ex-prefix Ex > {log} 2>&1
+        """
+
+
+# ============================================================
+# 5. Build k_min heatmap
+# ============================================================
+rule build_kmin_heatmap_ggplot2:
+    input:
+        in_stable = f"{FINAL_SUMMARY_DIR}/In_stable_classification.tsv",
+        ex_stable = f"{FINAL_SUMMARY_DIR}/Ex_stable_classification.tsv",
+        in_kmin = expand(f"{OUTDIR_BASE}/{{rep}}/In_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath),
+        ex_kmin = expand(f"{OUTDIR_BASE}/{{rep}}/Ex_all_subtypes_vulnerability_kmin_summary.tsv", rep=filespath)
+    output:
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.png",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_capture_rate_any_hit_ggplot2_clean.pdf",
+
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_source_ggplot2_clean.tsv",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_source_ggplot2_clean.tsv",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/In_kmin_heatmap_row_summary_ggplot2_clean.tsv",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/Ex_kmin_heatmap_row_summary_ggplot2_clean.tsv",
+
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_source_capture_rate_any_hit_ggplot2_clean.tsv",
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/InEx_combined_kmin_heatmap_row_summary_capture_rate_any_hit_ggplot2_clean.tsv"
+    params:
+        run_root = OUTDIR_BASE,
+        stable_dir = FINAL_SUMMARY_DIR,
+        outdir = KMIN_HEATMAP_GGPLOT_OUTDIR,
+        value_col = "capture_rate_any_hit",
+        add_top_unstable = 0,
+        kmin_min = 2,
+        kmin_max = 24
+    log:
+        f"{KMIN_HEATMAP_GGPLOT_OUTDIR}/build_kmin_heatmap_ggplot2.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {R_SCRIPT} {KMIN_HEATMAP_GGPLOT_SCRIPT} \
+            --run-root {params.run_root} \
+            --stable-dir {params.stable_dir} \
+            --outdir {params.outdir} \
+            --value-col {params.value_col} \
+            --add-top-unstable {params.add_top_unstable} \
+            --kmin-min {params.kmin_min} \
+            --kmin-max {params.kmin_max} \
+            --save-pdf > {log} 2>&1
+        """
+
+
+# ============================================================
+# 6. Build main-hit composition by stable class blocks
+# ============================================================
+rule build_mainhit_composition_by_stable_class_blocks:
+    input:
+        f"{STRUCTURE_OUTDIR}/stable_subtype_kmin_structure.tsv",
+        f"{STRUCTURE_OUTDIR}/stable_hit_cluster_summary.tsv"
+    output:
+        f"{MAINHIT_BLOCKS_OUTDIR}/In_Ex_mainhit_composition_by_stable_class_blocks_cleanlegend_usedonly.png",
+        f"{MAINHIT_BLOCKS_OUTDIR}/In_Ex_mainhit_composition_by_stable_class_blocks_cleanlegend_usedonly.pdf"
+    params:
+        structure_dir = STRUCTURE_OUTDIR,
+        outdir = MAINHIT_BLOCKS_OUTDIR,
+        script = MAINHIT_BLOCKS_SCRIPT
+    log:
+        f"{MAINHIT_BLOCKS_OUTDIR}/build_mainhit_composition_by_stable_class_blocks.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir}
+
+        {R_SCRIPT} {params.script} \
+            --structure-dir {params.structure_dir} \
+            --outdir {params.outdir} \
+            --save-pdf > {log} 2>&1
+        """
