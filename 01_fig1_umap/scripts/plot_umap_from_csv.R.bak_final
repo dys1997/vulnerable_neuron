@@ -1,0 +1,653 @@
+#!/usr/bin/env Rscript
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+  library(mascarade)
+  library(ggrepel)
+  library(grid)
+})
+
+options(bitmapType = "cairo")
+
+parse_args <- function(args) {
+  if (length(args) %% 2 != 0) {
+    stop("Arguments must be provided as --key value pairs.")
+  }
+
+  res <- list(
+    input = NULL,
+    out_prefix = NULL,
+    region_col = "Region",
+    disease_col = "disease",
+    celltype_col = "CellType",
+    org_col = "Org_celltype",
+    umap1_col = "UMAP1",
+    umap2_col = "UMAP2",
+    seed = 123,
+    width = 14,
+    height = 14,
+    dpi = 300
+  )
+
+  i <- 1
+  while (i <= length(args)) {
+    key <- sub("^--", "", args[i])
+    value <- args[i + 1]
+    res[[key]] <- value
+    i <- i + 2
+  }
+
+  required <- c("input", "out_prefix")
+  missing <- required[vapply(required, function(x) is.null(res[[x]]), logical(1))]
+
+  if (length(missing) > 0) {
+    stop("Missing required arguments: ", paste(missing, collapse = ", "))
+  }
+
+  res$seed <- as.integer(res$seed)
+  res$width <- as.numeric(res$width)
+  res$height <- as.numeric(res$height)
+  res$dpi <- as.integer(res$dpi)
+
+  res
+}
+
+args <- parse_args(commandArgs(trailingOnly = TRUE))
+
+message("[INFO] Reading: ", args$input)
+
+df <- read.csv(
+  args$input,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+required_cols <- c(
+  args$umap1_col,
+  args$umap2_col,
+  args$region_col,
+  args$disease_col,
+  args$celltype_col,
+  args$org_col
+)
+
+missing_cols <- setdiff(required_cols, colnames(df))
+
+if (length(missing_cols) > 0) {
+  stop("Missing required columns in CSV: ", paste(missing_cols, collapse = ", "))
+}
+
+df <- df %>%
+  mutate(
+    Region_plot       = .data[[args$region_col]],
+    Disease_plot      = .data[[args$disease_col]],
+    CellType_plot     = .data[[args$celltype_col]],
+    Org_celltype_plot = .data[[args$org_col]],
+    UMAP1_plot        = .data[[args$umap1_col]],
+    UMAP2_plot        = .data[[args$umap2_col]]
+  ) %>%
+  mutate(
+    CellType_plot = as.character(CellType_plot),
+    CellType_plot = ifelse(CellType_plot == "Others", "T Cell", CellType_plot),
+    Org_celltype_plot = as.character(Org_celltype_plot),
+    Region_plot = as.character(Region_plot),
+    Disease_plot = as.character(Disease_plot)
+  ) %>%
+  filter(
+    !is.na(UMAP1_plot),
+    !is.na(UMAP2_plot),
+    !is.na(Org_celltype_plot),
+    !is.na(CellType_plot),
+    !is.na(Region_plot),
+    !is.na(Disease_plot)
+  )
+
+set.seed(args$seed)
+df_plot <- df %>% slice_sample(prop = 1)
+
+# ============================================================
+# User-defined colors
+# ============================================================
+
+class_colors <- c(
+  "Ex" = "#FB8072",
+  "In" = "#56B4E9"
+)
+
+region_colors_user <- c(
+  "MCX" = "#ec4f93",
+  "PFC" = "#2ca25f"
+)
+
+disease_colors_user <- c(
+  "Control" = "#4C78A8",
+  "C9ALS"   = "#E45756",
+  "ALS"     = "#E45756",
+  "FTD"     = "#7E57C2"
+)
+
+# Other major classes. Ast is NOT red to avoid conflict with Ex.
+other_class_colors <- c(
+  "Ast"    = "#66C2A5",
+  "Olg"    = "#8DD3C7",
+  "OPC"    = "#BEBADA",
+  "Mic"    = "#8073AC",
+  "End"    = "#1B9E77",
+  "Fib"    = "#A6761D",
+  "SMC"    = "#E7298A",
+  "Peri"   = "#D95F02",
+  "T Cell" = "#B09C85"
+)
+
+major_base_cols <- c(class_colors, other_class_colors)
+
+fallback_seed <- c(
+  "#7F7F7F", "#BCBD22", "#17BECF", "#9467BD", "#8C564B",
+  "#E377C2", "#AEC7E8", "#FFBB78", "#98DF8A", "#C5B0D5"
+)
+
+make_fallback_palette <- function(n) {
+  if (n <= 0) {
+    return(character(0))
+  }
+
+  if (n <= length(fallback_seed)) {
+    return(fallback_seed[seq_len(n)])
+  }
+
+  grDevices::colorRampPalette(fallback_seed)(n)
+}
+
+make_named_palette <- function(levels_vec, named_cols) {
+  values <- named_cols[levels_vec]
+  names(values) <- levels_vec
+
+  missing_levels <- names(values)[is.na(values)]
+
+  if (length(missing_levels) > 0) {
+    extra_cols <- make_fallback_palette(length(missing_levels))
+    values[missing_levels] <- extra_cols
+  }
+
+  values
+}
+
+mix_hex <- function(col1, col2, w = 0.5) {
+  rgb1 <- grDevices::col2rgb(col1)
+  rgb2 <- grDevices::col2rgb(col2)
+  rgb_new <- round((1 - w) * rgb1 + w * rgb2)
+  grDevices::rgb(rgb_new[1], rgb_new[2], rgb_new[3], maxColorValue = 255)
+}
+
+make_subtype_palette <- function(base_col, n) {
+  if (n <= 0) {
+    return(character(0))
+  }
+
+  if (n == 1) {
+    return(base_col)
+  }
+
+  light_col <- mix_hex(base_col, "#FFFFFF", w = 0.42)
+  dark_col  <- mix_hex(base_col, "#000000", w = 0.18)
+
+  grDevices::colorRampPalette(c(light_col, base_col, dark_col))(n)
+}
+
+infer_major_class <- function(celltype, org_celltype) {
+  x <- paste(as.character(celltype), as.character(org_celltype), sep = "__")
+
+  if (grepl("(^|[._[:space:]-])Ex([._[:space:]-]|$)|Excitatory|Glut", x, ignore.case = TRUE)) {
+    return("Ex")
+  }
+
+  if (grepl("(^|[._[:space:]-])In([._[:space:]-]|$)|Inhibitory|GABA", x, ignore.case = TRUE)) {
+    return("In")
+  }
+
+  if (grepl("Ast|Astro", x, ignore.case = TRUE)) {
+    return("Ast")
+  }
+
+  if (grepl("OPC", x, ignore.case = TRUE)) {
+    return("OPC")
+  }
+
+  if (grepl("Olg|Olig|Oligodendrocyte", x, ignore.case = TRUE)) {
+    return("Olg")
+  }
+
+  if (grepl("Mic|Micro", x, ignore.case = TRUE)) {
+    return("Mic")
+  }
+
+  if (grepl("End|Endothelial", x, ignore.case = TRUE)) {
+    return("End")
+  }
+
+  if (grepl("Fib|Fibro", x, ignore.case = TRUE)) {
+    return("Fib")
+  }
+
+  if (grepl("SMC|Smooth", x, ignore.case = TRUE)) {
+    return("SMC")
+  }
+
+  if (grepl("Peri|Pericyte", x, ignore.case = TRUE)) {
+    return("Peri")
+  }
+
+  if (grepl("T Cell|T_cell|Tcell|T-cell", x, ignore.case = TRUE)) {
+    return("T Cell")
+  }
+
+  return(as.character(celltype))
+}
+
+# ============================================================
+# Factor order and color mapping
+# ============================================================
+
+region_order <- c("MCX", "PFC")
+region_levels_present <- unique(df_plot$Region_plot)
+region_levels_final <- c(
+  region_order[region_order %in% region_levels_present],
+  sort(setdiff(region_levels_present, region_order))
+)
+
+df_plot$Region_plot <- factor(df_plot$Region_plot, levels = region_levels_final)
+region_cols <- make_named_palette(levels(df_plot$Region_plot), region_colors_user)
+
+disease_order <- c("Control", "C9ALS", "ALS", "FTD")
+disease_levels_present <- unique(df_plot$Disease_plot)
+disease_levels_final <- c(
+  disease_order[disease_order %in% disease_levels_present],
+  sort(setdiff(disease_levels_present, disease_order))
+)
+
+df_plot$Disease_plot <- factor(df_plot$Disease_plot, levels = disease_levels_final)
+disease_cols <- make_named_palette(levels(df_plot$Disease_plot), disease_colors_user)
+
+org_map <- df_plot %>%
+  distinct(CellType_plot, Org_celltype_plot) %>%
+  mutate(
+    Major_class = mapply(
+      infer_major_class,
+      CellType_plot,
+      Org_celltype_plot,
+      USE.NAMES = FALSE
+    )
+  )
+
+major_order <- c(
+  "Ex", "In", "Ast", "Olg", "OPC", "Mic", "End", "Fib", "SMC", "Peri", "T Cell"
+)
+
+major_levels_final <- c(
+  major_order[major_order %in% unique(org_map$Major_class)],
+  sort(setdiff(unique(org_map$Major_class), major_order))
+)
+
+org_map <- org_map %>%
+  mutate(
+    Major_class = factor(Major_class, levels = major_levels_final)
+  ) %>%
+  arrange(Major_class, Org_celltype_plot)
+
+missing_major <- setdiff(as.character(unique(org_map$Major_class)), names(major_base_cols))
+
+if (length(missing_major) > 0) {
+  extra_cols <- make_fallback_palette(length(missing_major))
+  names(extra_cols) <- missing_major
+  major_base_cols <- c(major_base_cols, extra_cols)
+}
+
+org_cols_df <- org_map %>%
+  group_by(Major_class) %>%
+  group_modify(~{
+    major <- as.character(.y$Major_class[[1]])
+    base_col <- major_base_cols[major]
+
+    .x %>%
+      arrange(Org_celltype_plot) %>%
+      mutate(
+        org_col = make_subtype_palette(base_col, nrow(.x))
+      )
+  }) %>%
+  ungroup()
+
+org_cols <- org_cols_df$org_col
+names(org_cols) <- org_cols_df$Org_celltype_plot
+
+df_plot$Org_celltype_plot <- factor(
+  df_plot$Org_celltype_plot,
+  levels = org_cols_df$Org_celltype_plot
+)
+
+df_plot$CellType_plot <- factor(
+  df_plot$CellType_plot,
+  levels = unique(org_map$CellType_plot)
+)
+
+# ============================================================
+# Theme
+# ============================================================
+
+base_theme <- theme_classic(base_size = 14) +
+  theme(
+    axis.text    = element_blank(),
+    axis.ticks   = element_blank(),
+    axis.line    = element_blank(),
+    axis.title   = element_blank(),
+    plot.title   = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.position = "none",
+    plot.margin  = margin(8, 8, 8, 8)
+  )
+
+legend_theme <- theme_void(base_size = 11) +
+  theme(
+    plot.margin = margin(4, 4, 4, 4)
+  )
+
+# ============================================================
+# Manual legend
+# This avoids ggplot2 guide_legend/add_guides bugs completely.
+# ============================================================
+
+make_manual_legend <- function(color_map,
+                               title = NULL,
+                               ncol = 1,
+                               point_size = 3.2,
+                               text_size = 3.0) {
+  labs <- names(color_map)
+  cols <- unname(color_map)
+  n <- length(labs)
+
+  if (n == 0) {
+    return(ggplot() + theme_void())
+  }
+
+  nrow <- ceiling(n / ncol)
+
+  legend_df <- data.frame(
+    label = labs,
+    color = cols,
+    idx = seq_len(n),
+    stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      col_id = ceiling(idx / nrow),
+      row_id = idx - (col_id - 1) * nrow,
+      x_point = (col_id - 1) * 4.5 + 0.0,
+      x_text  = (col_id - 1) * 4.5 + 0.35,
+      y = -row_id
+    )
+
+  p <- ggplot(legend_df) +
+    geom_point(
+      aes(x = x_point, y = y, color = color),
+      size = point_size,
+      show.legend = FALSE
+    ) +
+    geom_text(
+      aes(x = x_text, y = y, label = label),
+      hjust = 0,
+      size = text_size,
+      show.legend = FALSE
+    ) +
+    scale_color_identity(guide = "none") +
+    coord_cartesian(clip = "off") +
+    legend_theme +
+    xlim(-0.4, max(legend_df$x_text) + 3.8)
+
+  if (!is.null(title)) {
+    title_df <- data.frame(
+      x = 0,
+      y = 0,
+      label = title
+    )
+
+    p <- p +
+      geom_text(
+        data = title_df,
+        aes(x = x, y = y, label = label),
+        hjust = 0,
+        fontface = "bold",
+        size = text_size + 0.4,
+        inherit.aes = FALSE
+      )
+  }
+
+  p
+}
+
+# ============================================================
+# Plot functions
+# ============================================================
+
+plot_umap_core <- function(data,
+                           color_col,
+                           title_text,
+                           color_map,
+                           point_size = 0.08,
+                           alpha_val = 0.30) {
+
+  ggplot(
+    data,
+    aes(x = UMAP1_plot, y = UMAP2_plot, color = .data[[color_col]])
+  ) +
+    geom_point(size = point_size, alpha = alpha_val, show.legend = FALSE) +
+    coord_equal() +
+    labs(title = title_text, color = NULL) +
+    scale_color_manual(values = color_map, drop = FALSE, guide = "none") +
+    base_theme
+}
+
+plot_umap_org_core <- function(data,
+                               point_size = 0.10,
+                               alpha_val = 0.80,
+                               expand_val = 0.006,
+                               outline_lwd = 0.40,
+                               outline_lty = 2,
+                               outline_color = "black",
+                               label_size = 5,
+                               title_text = "Org_celltype colored / CellType outlined") {
+
+  df2 <- data %>%
+    transmute(
+      umap_1       = UMAP1_plot,
+      umap_2       = UMAP2_plot,
+      Org_celltype = Org_celltype_plot,
+      CellType     = CellType_plot
+    ) %>%
+    filter(
+      !is.na(umap_1),
+      !is.na(umap_2),
+      !is.na(Org_celltype),
+      !is.na(CellType)
+    )
+
+  maskTable <- tryCatch(
+    {
+      generateMask(
+        dims     = as.matrix(df2[, c("umap_1", "umap_2")]),
+        clusters = df2$CellType,
+        expand   = expand_val
+      )
+    },
+    error = function(e) {
+      message("[WARN] generateMask failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  label_df <- df2 %>%
+    group_by(CellType) %>%
+    summarise(
+      label_x = median(umap_1),
+      label_y = median(umap_2),
+      .groups = "drop"
+    )
+
+  p <- ggplot(df2, aes(x = umap_1, y = umap_2, color = Org_celltype)) +
+    geom_point(size = point_size, alpha = alpha_val, show.legend = FALSE) +
+    coord_equal() +
+    labs(
+      title = title_text,
+      color = NULL
+    ) +
+    scale_color_manual(values = org_cols, drop = FALSE, guide = "none") +
+    base_theme
+
+  if (!is.null(maskTable) && nrow(maskTable) > 0) {
+    p <- p +
+      geom_path(
+        data = maskTable,
+        aes(x = umap_1, y = umap_2, group = group),
+        inherit.aes = FALSE,
+        linewidth = outline_lwd,
+        linetype = outline_lty,
+        color = outline_color,
+        show.legend = FALSE
+      )
+  }
+
+  p <- p +
+    geom_text_repel(
+      data = label_df,
+      aes(x = label_x, y = label_y, label = CellType),
+      inherit.aes = FALSE,
+      color = "black",
+      size = label_size,
+      fontface = "bold",
+      box.padding = 0.35,
+      point.padding = 0.20,
+      segment.color = "grey40",
+      segment.size = 0.3,
+      max.overlaps = Inf,
+      seed = 123,
+      show.legend = FALSE
+    )
+
+  p
+}
+
+# ============================================================
+# Build core plots
+# ============================================================
+
+p_region_core <- plot_umap_core(
+  data = df_plot,
+  color_col = "Region_plot",
+  title_text = args$region_col,
+  color_map = region_cols,
+  point_size = 0.08,
+  alpha_val = 0.30
+)
+
+p_disease_core <- plot_umap_core(
+  data = df_plot,
+  color_col = "Disease_plot",
+  title_text = args$disease_col,
+  color_map = disease_cols,
+  point_size = 0.05,
+  alpha_val = 0.22
+)
+
+p_anno_core <- plot_umap_org_core(
+  data = df_plot,
+  point_size = 0.10,
+  alpha_val = 0.80,
+  expand_val = 0.006,
+  outline_lwd = 0.40,
+  outline_lty = 2,
+  outline_color = "black",
+  label_size = 5,
+  title_text = "Org_celltype colored / CellType outlined"
+)
+
+# ============================================================
+# Manual legends
+# ============================================================
+
+legend_region <- make_manual_legend(
+  region_cols,
+  title = NULL,
+  ncol = length(region_cols),
+  point_size = 3.2,
+  text_size = 3.2
+)
+
+legend_disease <- make_manual_legend(
+  disease_cols,
+  title = NULL,
+  ncol = length(disease_cols),
+  point_size = 3.2,
+  text_size = 3.2
+)
+
+legend_org <- make_manual_legend(
+  org_cols,
+  title = "Org_celltype",
+  ncol = 2,
+  point_size = 2.6,
+  text_size = 2.35
+)
+
+# Single plots with manual legends
+p_region <- p_region_core / legend_region +
+  plot_layout(heights = c(1, 0.10))
+
+p_disease <- p_disease_core / legend_disease +
+  plot_layout(heights = c(1, 0.10))
+
+p_anno <- p_anno_core + legend_org +
+  plot_layout(widths = c(1, 0.45))
+
+# Combined layout:
+# top = cell annotation with legend
+# bottom = region and disease plots
+bottom_row <- p_region + p_disease +
+  plot_layout(ncol = 2, widths = c(1, 1))
+
+p_all <- p_anno / bottom_row +
+  plot_layout(heights = c(1.35, 1))
+
+# ============================================================
+# Output files
+# ============================================================
+
+png_region  <- paste0(args$out_prefix, "_region.png")
+pdf_region  <- paste0(args$out_prefix, "_region.pdf")
+
+png_disease <- paste0(args$out_prefix, "_disease.png")
+pdf_disease <- paste0(args$out_prefix, "_disease.pdf")
+
+png_org     <- paste0(args$out_prefix, "_orgcelltype_outline.png")
+pdf_org     <- paste0(args$out_prefix, "_orgcelltype_outline.pdf")
+
+png_layout  <- paste0(args$out_prefix, "_layout.png")
+pdf_layout  <- paste0(args$out_prefix, "_layout.pdf")
+
+ggsave(filename = png_region,  plot = p_region,  width = 8,  height = 6.4, dpi = args$dpi)
+ggsave(filename = pdf_region,  plot = p_region,  width = 8,  height = 6.4)
+
+ggsave(filename = png_disease, plot = p_disease, width = 8,  height = 6.4, dpi = args$dpi)
+ggsave(filename = pdf_disease, plot = p_disease, width = 8,  height = 6.4)
+
+ggsave(filename = png_org,     plot = p_anno,    width = 14, height = 10, dpi = args$dpi)
+ggsave(filename = pdf_org,     plot = p_anno,    width = 14, height = 10)
+
+ggsave(filename = png_layout,  plot = p_all,     width = args$width, height = args$height, dpi = args$dpi)
+ggsave(filename = pdf_layout,  plot = p_all,     width = args$width, height = args$height)
+
+message("[OK] Saved: ", png_region)
+message("[OK] Saved: ", pdf_region)
+message("[OK] Saved: ", png_disease)
+message("[OK] Saved: ", pdf_disease)
+message("[OK] Saved: ", png_org)
+message("[OK] Saved: ", pdf_org)
+message("[OK] Saved: ", png_layout)
+message("[OK] Saved: ", pdf_layout)
