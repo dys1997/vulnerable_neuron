@@ -5,8 +5,13 @@
 !01_fig1_umap/
 !01_fig1_umap/Snakefile
 !01_fig1_umap/scripts/
-!01_fig1_umap/results/
 !01_fig1_umap/scripts/**
-!01_fig1_umap/results/**
 
 01_fig1_umap/scripts/*.bak*
+
+!02_vulnerality/
+!02_vulnerality/Snakefile
+!02_vulnerality/scripts/
+!02_vulnerality/scripts/**
+
+02_vulnerality/scripts/*.bak*

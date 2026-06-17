@@ -1,0 +1,192 @@
+configfile: "config.yaml"
+
+from pathlib import Path
+
+# =========================
+# 读取配置
+# =========================
+BASE_DIR = Path(workflow.basedir)
+
+INPUT_BASE = config["input_base"]
+PYTHON_BIN = config["python_bin"]
+
+GLM_OUTDIR = config.get("glm_outdir", config.get("outdir"))
+if GLM_OUTDIR is None:
+    raise ValueError("config.yaml must define glm_outdir or outdir")
+
+PLOT_OUTDIR = config.get("plot_outdir", str(Path(GLM_OUTDIR) / "plots_intuitive_v2"))
+SUMMARY_DIR = config.get("summary_dir", str(Path(GLM_OUTDIR) / "run_summaries"))
+
+
+def resolve_script(p):
+    p = Path(p)
+    return str(p if p.is_absolute() else (BASE_DIR / p).resolve())
+
+
+GLM_SCRIPT = resolve_script(config.get("glm_script", "scripts/run_vuln_glm.py"))
+PLOT_SCRIPT = resolve_script(config.get("plot_script", "scripts/plot_vulnerability_summary.py"))
+VGLM_PATH = config["vglm_path"]
+
+DATASETS = config["datasets"]
+CELL_CLASSES = config.get("cell_classes", ["Ex", "In"])
+THREADS_PER_GLM = int(config.get("threads_per_glm", 1))
+
+# =========================
+# 生成 condition 列表
+# =========================
+CONDITIONS = [
+    f"{ds_key}_{cell_class}"
+    for ds_key in DATASETS.keys()
+    for cell_class in CELL_CLASSES
+]
+
+# =========================
+# 参数预处理
+# =========================
+USE_FDR_FLAG = "--use-fdr-in-plot" if config.get("use_fdr_in_plot", False) else ""
+PLOT_FLAG = "--plot" if config.get("plot", False) else ""
+STANDARDIZE_FLAG = "--standardize-numeric" if config.get("standardize_numeric", False) else ""
+STRICT_COVARIATES_FLAG = "--strict-covariates" if config.get("strict_covariates", False) else ""
+PROGRESS_FLAG = "--progress" if config.get("progress", False) else ""
+SAVE_FULL_FLAG = "--save-full" if config.get("save_full", False) else ""
+
+EXTRA_GLM_FLAGS = " ".join(
+    x for x in [
+        USE_FDR_FLAG,
+        PLOT_FLAG,
+        STANDARDIZE_FLAG,
+        STRICT_COVARIATES_FLAG,
+        PROGRESS_FLAG,
+        SAVE_FULL_FLAG,
+    ] if x
+)
+
+COVARIATE_COLS = config.get("covariate_cols", [])
+COVARIATE_PART = ""
+if COVARIATE_COLS:
+    COVARIATE_PART = "--covariate-cols " + " ".join(COVARIATE_COLS)
+
+EX_ORDER = config.get("ex_order", ["SALS_PFC_Ex", "FTLD_PFC_Ex", "SALS_MCX_Ex", "FTLD_MCX_Ex"])
+IN_ORDER = config.get("in_order", ["SALS_PFC_In", "FTLD_PFC_In", "SALS_MCX_In", "FTLD_MCX_In"])
+EX_XLIM = config.get("ex_xlim", [-0.2, 2.2])
+IN_XLIM = config.get("in_xlim", [-0.2, 2.2])
+
+
+# =========================
+# 辅助函数
+# =========================
+def get_input_h5ad(wc):
+    ds_key = wc.condition.rsplit("_", 1)[0]
+    fname = DATASETS[ds_key] + ".h5ad"
+    return str(Path(INPUT_BASE) / fname)
+
+
+def get_subset_value(wc):
+    return wc.condition.rsplit("_", 1)[1]
+
+
+# =========================
+# 总目标
+# =========================
+rule all:
+    input:
+        expand(str(Path(GLM_OUTDIR) / "{condition}.csv"), condition=CONDITIONS),
+        expand(str(Path(SUMMARY_DIR) / "{condition}.json"), condition=CONDITIONS),
+        str(Path(PLOT_OUTDIR) / "all_vulnerability_results_long.csv"),
+        str(Path(PLOT_OUTDIR) / "binary_tile_ex_sigdot_only_fixedlegend.png"),
+        str(Path(PLOT_OUTDIR) / "binary_tile_in_sigdot_only_fixedlegend.png")
+
+
+# =========================
+# 单个 h5ad -> Ex/In 子集 -> GLM
+# =========================
+rule run_glm:
+    input:
+        h5ad=get_input_h5ad
+    output:
+        csv=str(Path(GLM_OUTDIR) / "{condition}.csv"),
+        summary=str(Path(SUMMARY_DIR) / "{condition}.json")
+    params:
+        subset_value=get_subset_value,
+        subset_column=config.get("subset_column", "CellType"),
+        status_col=config.get("status_col", "SampleStatus"),
+        cluster_col=config.get("cluster_col", "Org_celltype"),
+        donor_col=config.get("donor_col", "Sample_ID"),
+        control_label=config.get("control_label", "control"),
+        direction=config.get("direction", "vulnerable"),
+        p_cut=config.get("p_cut", 0.05),
+        random_seed=config.get("random_seed", 666),
+        robust_cov=config.get("robust_cov", "HC3"),
+        donor_weight_mode=config.get("donor_weight_mode", "capped"),
+        weight_cap=config.get("weight_cap", "q75"),
+        bounds_scope=config.get("bounds_scope", "used"),
+        cat_agg=config.get("cat_agg", "mode"),
+        verbose=config.get("verbose", 1),
+        covariate_part=COVARIATE_PART,
+        vglm_path=VGLM_PATH,
+        glm_script=GLM_SCRIPT,
+        extra_glm_flags=EXTRA_GLM_FLAGS
+    threads: THREADS_PER_GLM
+    shell:
+        r'''
+        set -euo pipefail
+        mkdir -p "{GLM_OUTDIR}" "{SUMMARY_DIR}"
+
+        "{PYTHON_BIN}" "{params.glm_script}" \
+          --input "{input.h5ad}" \
+          --output "{output.csv}" \
+          --subset-column "{params.subset_column}" \
+          --subset-value "{params.subset_value}" \
+          --status-col "{params.status_col}" \
+          --cluster-col "{params.cluster_col}" \
+          --donor-col "{params.donor_col}" \
+          --control-label "{params.control_label}" \
+          --direction "{params.direction}" \
+          --p-cut {params.p_cut} \
+          --random-seed {params.random_seed} \
+          {params.covariate_part} \
+          --robust-cov "{params.robust_cov}" \
+          --donor-weight-mode "{params.donor_weight_mode}" \
+          --weight-cap "{params.weight_cap}" \
+          --bounds-scope "{params.bounds_scope}" \
+          --cat-agg "{params.cat_agg}" \
+          --verbose {params.verbose} \
+          --summary-json "{output.summary}" \
+          --vglm-path "{params.vglm_path}" \
+          {params.extra_glm_flags}
+        '''
+
+
+# =========================
+# 汇总并画图
+# =========================
+rule plot_summary:
+    input:
+        expand(str(Path(GLM_OUTDIR) / "{condition}.csv"), condition=CONDITIONS)
+    output:
+        long_csv=str(Path(PLOT_OUTDIR) / "all_vulnerability_results_long.csv"),
+        ex_png=str(Path(PLOT_OUTDIR) / "binary_tile_ex_sigdot_only_fixedlegend.png"),
+        in_png=str(Path(PLOT_OUTDIR) / "binary_tile_in_sigdot_only_fixedlegend.png")
+    params:
+        plot_script=PLOT_SCRIPT,
+        input_dir=GLM_OUTDIR,
+        output_dir=PLOT_OUTDIR,
+        ex_order=" ".join(EX_ORDER),
+        in_order=" ".join(IN_ORDER),
+        ex_xlim_min=EX_XLIM[0],
+        ex_xlim_max=EX_XLIM[1],
+        in_xlim_min=IN_XLIM[0],
+        in_xlim_max=IN_XLIM[1]
+    shell:
+        r'''
+        set -euo pipefail
+        mkdir -p "{params.output_dir}"
+
+        "{PYTHON_BIN}" "{params.plot_script}" \
+          --input-dir "{params.input_dir}" \
+          --output-dir "{params.output_dir}" \
+          --ex-order {params.ex_order} \
+          --in-order {params.in_order} \
+          --ex-xlim {params.ex_xlim_min} {params.ex_xlim_max} \
+          --in-xlim {params.in_xlim_min} {params.in_xlim_max}
+        '''
