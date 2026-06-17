@@ -1,0 +1,77 @@
+configfile: "config.yaml"
+
+rule all:
+    input:
+        config["metadata_csv"],
+        f"{config['plot_prefix']}_region.png",
+        f"{config['plot_prefix']}_disease.png",
+        f"{config['plot_prefix']}_orgcelltype_outline.png",
+        f"{config['plot_prefix']}_layout.png",
+        f"{config['plot_prefix']}_layout.pdf",
+
+rule export_umap_metadata:
+    input:
+        h5ad=config["input_h5ad"]
+    output:
+        csv=config["metadata_csv"]
+    params:
+        script=config.get("export_script", "export_umap_metadata.py"),
+        umap_key=config.get("umap_key", "X_umap"),
+        cell_id_col=config.get("cell_id_col", "cell_id"),
+        obs_cols=config.get("obs_cols", None),
+    shell:
+        r'''
+        if [ -n "{params.obs_cols}" ] && [ "{params.obs_cols}" != "None" ]; then
+            /mnt/workspace/tools/envs/pysodb/bin/python {params.script} \
+              --input {input.h5ad} \
+              --output {output.csv} \
+              --umap-key {params.umap_key} \
+              --cell-id-col {params.cell_id_col} \
+              --obs-cols "{params.obs_cols}"
+        else
+            /mnt/workspace/tools/envs/pysodb/bin/python {params.script} \
+              --input {input.h5ad} \
+              --output {output.csv} \
+              --umap-key {params.umap_key} \
+              --cell-id-col {params.cell_id_col}
+        fi
+        '''
+
+rule plot_umap:
+    input:
+        csv=config["metadata_csv"]
+    output:
+        region=f"{config['plot_prefix']}_region.png",
+        disease=f"{config['plot_prefix']}_disease.png",
+        org=f"{config['plot_prefix']}_orgcelltype_outline.png",
+        layout_png=f"{config['plot_prefix']}_layout.png",
+        layout_pdf=f"{config['plot_prefix']}_layout.pdf",
+    params:
+        script=config.get("plot_script", "plot_umap_from_csv.R"),
+        plot_prefix=config["plot_prefix"],
+        region_col=config.get("region_col", "Region"),
+        disease_col=config.get("disease_col", "disease"),
+        celltype_col=config.get("celltype_col", "CellType"),
+        org_col=config.get("org_col", "Org_celltype"),
+        umap1_col=config.get("umap1_col", "UMAP1"),
+        umap2_col=config.get("umap2_col", "UMAP2"),
+        width=config.get("plot_width", 14),
+        height=config.get("plot_height", 14),
+        dpi=config.get("plot_dpi", 300),
+    shell:
+        r'''
+        /mnt/workspace/tools/envs/r-fig/bin/Rscript {params.script} \
+          --input {input.csv} \
+          --out_prefix {params.plot_prefix} \
+          --region_col {params.region_col} \
+          --disease_col {params.disease_col} \
+          --celltype_col {params.celltype_col} \
+          --org_col {params.org_col} \
+          --umap1_col {params.umap1_col} \
+          --umap2_col {params.umap2_col} \
+          --width {params.width} \
+          --height {params.height} \
+          --dpi {params.dpi}
+        '''
+
+# snakemake -s Snakefile  --cluster "qsub -V -q cpu8380  -cwd  -N stability  -l mem=300G:cpu=2 --running_timeout 300h " --jobs 4  -k --latency-wait 90 --rerun-incomplete     > check.log 2>&1  &
