@@ -76,17 +76,17 @@ rule all:
         # ----------------------------------------------------
         # PV barcode-level stable vulnerable / non-vulnerable states
         # ----------------------------------------------------
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_stable_state.tsv", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction.tsv", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_vulnerable_barcodes.txt", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_nonvulnerable_barcodes.txt", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_intermediate_barcodes.txt", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_state_composition_by_Org_celltype.tsv", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_original_subtype_cellstate_summary.tsv", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction_histogram.png", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_stable_state.png", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_hit_fraction.png", rep=filespath),
-        expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_Org_celltype.png", rep=filespath)
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_stable_state.tsv", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction.tsv", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_vulnerable_barcodes.txt", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_nonvulnerable_barcodes.txt", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_intermediate_barcodes.txt", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_stable_state_composition_by_Org_celltype.tsv", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_original_subtype_cellstate_summary.tsv", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_cell_hit_fraction_histogram.png", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_stable_state.png", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_hit_fraction.png", rep=filespath),
+        # expand(f"{OUTDIR_BASE}/{{rep}}/PV_cellstate_stability/PV_umap_Org_celltype.png", rep=filespath)
 
 
 # ============================================================
