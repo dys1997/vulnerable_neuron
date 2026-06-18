@@ -1,0 +1,126 @@
+### GWAS summary statistics 文件进行标准化预处理（Munge）
+```{r}
+library(MungeSumstats)
+
+infile  <- "/mnt/alamo01/users/dengys/Project/jupyter/prepare/GWAS/GCST90027163_buildGRCh37.tsv.gz"
+outfile <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/SALS_Munge.tsv.gz"
+logdir  <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/Munge_SALS_logs"
+dir.create(logdir, showWarnings = FALSE, recursive = TRUE)
+
+# 列名已是标准Catalog命名，直接跑即可
+res <- format_sumstats(
+  path = infile,
+  ref_genome = "GRCh37",
+  dbSNP      = "155",   # 你已经安装了 SNPlocs.Hsapiens.dbSNP155.GRCh37
+  nThread    = 8,
+  imputation_ind = TRUE,
+  save_path  = outfile,
+  log_folder = logdir
+)
+
+
+```
+### 把已经 “Munge” 过的 GWAS 文件，再次加工成 MAGMA 需要的 3 列格式CHR:BP:A1:A2
+```{r}
+library(data.table)
+
+munge_fp <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/SALS_Munge.tsv.gz"
+bim_fp   <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS/g1000_eur.bim"
+out_fp   <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/SALS_for_magma.chr_bp_aa.pval.gz"
+
+# 1) 读入
+munge <- fread(munge_fp)                          # 有 CHR BP A1 A2 P N
+bim   <- fread(bim_fp, header = FALSE)            # .bim 六列
+setnames(bim, c("CHR_bim","SNP_bim","CM","BP_bim","A1_bim","A2_bim"))
+
+# 2) 用 CHR:BP 连接，把 .bim 的 A1/A2 顺序带过来
+munge[, CHR := as.integer(CHR)]
+munge[, BP  := as.integer(BP)]
+munge[, KEY := paste(CHR, BP, sep=":")]
+bim[,   KEY := paste(CHR_bim, BP_bim, sep=":")]
+
+x <- merge(munge, bim[, .(KEY, A1_bim, A2_bim)], by="KEY", all.x=TRUE)
+
+# 3) 按 .bim 的等位基因顺序生成 SNP = CHR:BP:A1:A2
+x[, SNP := paste(CHR, BP, A1_bim, A2_bim, sep=":")]
+
+# 4) 只保留 MAGMA 需要的三列；N 不在就给常数（你这批是 47571）
+if (!"N" %in% names(x) || any(is.na(x$N))) x[, N := 47571L]
+dt_out <- x[, .(SNP, P, N)]
+
+# 5) 用 base R 写 gzip（不走 data.table 压缩）
+con <- gzfile(out_fp, "w")
+write.table(dt_out, con, sep = "\t", row.names = FALSE, quote = FALSE)
+close(con)
+```
+
+
+
+### 从 MAGMA 输出中取 ZSTAT 最高的 Top 1000 基因生成两个基因集文件 (.gs)
+```{r}
+suppressPackageStartupMessages({
+  library(data.table)
+  library(biomaRt)
+})
+
+# ===== 1) 读 MAGMA 基因结果，按 ZSTAT 取 top1000 =====
+in_file  <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/ALS_gene.genes.out"
+out_dir  <- "/mnt/alamo01/users/dengys/Project/jupyter/GWAS_ALS/"
+gs_ensg  <- file.path(out_dir, "ALS_top1000.ensg.gs")
+gs_sym   <- file.path(out_dir, "ALS_top1000.symbol.gs")
+
+x <- fread(in_file)
+stopifnot(all(c("GENE","ZSTAT") %in% names(x)))
+
+# 去掉 NA ZSTAT，按 ZSTAT 降序取前 1000
+top <- x[!is.na(ZSTAT)][order(-ZSTAT)][1:1000, .(GENE)]
+# 去掉 ENSG 版本号（ENSG00000123456.7 -> ENSG00000123456）
+top[, GENE := sub("\\.\\d+$", "", GENE)]
+ensg_vec <- unique(top$GENE)
+
+cat(sprintf("[INFO] picked top %d ENSGs by ZSTAT\n", length(ensg_vec)))
+
+# ===== 2) 生成 ENSG 版 .gs（标准格式）=====
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+cat("TRAIT\tGENESET\n", file = gs_ensg)
+cat("ALS\t", file = gs_ensg, append = TRUE)
+cat(paste(ensg_vec, collapse=","), "\n", file = gs_ensg, append = TRUE)
+cat("[OK] wrote ENSG GS -> ", gs_ensg, "\n", sep = "")
+
+# ===== 3) biomaRt 映射 ENSG -> HGNC =====
+# 说明：HPC 上外网可能受限；若连接失败，见注释里的本地映射替代方案
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+map <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters    = "ensembl_gene_id",
+  values     = ensg_vec,
+  mart       = mart
+)
+
+# 清理 & 去重
+map$ensembl_gene_id <- sub("\\.\\d+$","", map$ensembl_gene_id)
+map <- unique(map[nchar(map$hgnc_symbol) > 0, ])
+sym_map <- setNames(map$hgnc_symbol, map$ensembl_gene_id)
+
+symbols <- unname(sym_map[ensg_vec])
+mapped  <- sum(!is.na(symbols))
+unmapped <- sum(is.na(symbols))
+cat(sprintf("[STATS] total=%d, mapped=%d, unmapped=%d\n",
+            length(ensg_vec), mapped, unmapped))
+
+# 用 ENSG 填补未映射项，防止空集
+symbols[is.na(symbols)] <- ensg_vec[is.na(symbols)]
+
+# 去重保持顺序
+symbols <- symbols[!duplicated(symbols)]
+
+# ===== 4) 输出 Symbol 版 .gs（标准格式）=====
+cat("TRAIT\tGENESET\n", file = gs_sym)
+cat("ALS\t", file = gs_sym, append = TRUE)
+cat(paste(symbols, collapse=","), "\n", file = gs_sym, append = TRUE)
+cat("[OK] wrote Symbol GS -> ", gs_sym, "\n", sep = "")
+
+
+```
+
+
