@@ -1,0 +1,452 @@
+filespath = {
+    "control_PFC": "/mnt/alamo01/projects/ChenLab/CNS/01_Preprocess/Homo_sapiens_38521060_2024_Rank0009/control_pfc_count.h5ad",
+    "control_MCX": "/mnt/alamo01/users/dengys/Project/jupyter/prepare/data/SALS_MCX_control.h5ad",
+}
+
+PYTHON = "/mnt/alamo01/users/dengys/anaconda/envs/pysodb/bin/python"
+R_BIN = "/mnt/alamo01/users/dengys/anaconda/envs/r-base2/bin/Rscript"
+
+PB_SCRIPT = "/mnt/alamo01/users/dengys/Project/jupyter/vulnerable_neurons/04_pseudobulk_DEG/scripts/build_pseudobulk.py"
+R_SCRIPT  = "/mnt/alamo01/users/dengys/Project/jupyter/vulnerable_neurons/04_pseudobulk_DEG/scripts/run_deg_go_edger.R"
+QC_SCRIPT = "/mnt/alamo01/users/dengys/Project/jupyter/vulnerable_neurons/04_pseudobulk_DEG/scripts/summarize_pseudobulk_donor_info.py"
+
+RESULTS_DIR = "/mnt/alamo01/users/dengys/Project/jupyter/vulnerable_neurons/04_pseudobulk_DEG/results"
+
+PB_DIR  = f"{RESULTS_DIR}/pseudobulk"
+DEG_DIR = f"{RESULTS_DIR}/DEG"
+GO_DIR  = f"{RESULTS_DIR}/GO"
+LOG_DIR = f"{RESULTS_DIR}/logs"
+
+# 改这里即可测试不同 donor/cell 保留标准
+MIN_CELLS = 7
+
+
+# ============================================================
+# Contrast design
+# 每个 contrast 都在 control_PFC 和 control_MCX 中跑
+# ============================================================
+
+CONTRASTS = {
+    "CDH4plus_vs_other5HT3aR": {
+        "reps": ["control_PFC", "control_MCX"],
+        "target_types": [
+            "In.5HT3aR.CDH4_CCK",
+            "In.5HT3aR.CDH4_SCGN",
+        ],
+        "reference_prefix": "In.5HT3aR.",
+        "reference_prefixes": [],
+        "reference_types": [],
+        "reference_exclude": [
+            "In.5HT3aR.CDH4_CCK",
+            "In.5HT3aR.CDH4_SCGN",
+        ],
+        "target_name": "In_5HT3aR_CDH4_plus",
+        "reference_name": "Other_In_5HT3aR",
+    },
+
+    "PTHLH_vs_MYBPC1": {
+        "reps": ["control_PFC", "control_MCX"],
+        "target_types": [
+            "In.PV.PVALB_PTHLH",
+        ],
+        "reference_prefix": "",
+        "reference_prefixes": [],
+        "reference_types": [
+            "In.PV.PVALB_MYBPC1",
+        ],
+        "reference_exclude": [],
+        "target_name": "In_PV_PVALB_PTHLH",
+        "reference_name": "In_PV_PVALB_MYBPC1",
+    },
+
+    "CEMIP_vs_MYBPC1": {
+        "reps": ["control_PFC", "control_MCX"],
+        "target_types": [
+            "In.PV.PVALB_CEMIP",
+        ],
+        "reference_prefix": "",
+        "reference_prefixes": [],
+        "reference_types": [
+            "In.PV.PVALB_MYBPC1",
+        ],
+        "reference_exclude": [],
+        "target_name": "In_PV_PVALB_CEMIP",
+        "reference_name": "In_PV_PVALB_MYBPC1",
+    },
+
+    "PCP4_NXPH2_vs_nearby_nonvulnerable_L4L5_L5_L5L6": {
+        "reps": ["control_PFC", "control_MCX"],
+        "target_types": [
+            "Ex.L5.PCP4_NXPH2",
+        ],
+        "reference_prefix": "",
+        "reference_prefixes": [
+            "Ex.L4_L5.",
+            "Ex.L5.",
+            "Ex.L5_L6.",
+        ],
+        "reference_types": [],
+        "reference_exclude": [
+            "Ex.L5.PCP4_NXPH2",
+            "Ex.L5.VAT1L_THSD4",
+            "Ex.L5.VAT1L_EYA4",
+        ],
+        "target_name": "Ex_L5_PCP4_NXPH2",
+        "reference_name": "Nearby_nonvulnerable_Ex_L4L5_L5_L5L6",
+    },
+
+    "VAT1Lplus_vs_nearby_nonvulnerable_L4L5_L5_L5L6": {
+        "reps": ["control_PFC", "control_MCX"],
+        "target_types": [
+            "Ex.L5.VAT1L_THSD4",
+            "Ex.L5.VAT1L_EYA4",
+        ],
+        "reference_prefix": "",
+        "reference_prefixes": [
+            "Ex.L4_L5.",
+            "Ex.L5.",
+            "Ex.L5_L6.",
+        ],
+        "reference_types": [],
+        "reference_exclude": [
+            "Ex.L5.PCP4_NXPH2",
+            "Ex.L5.VAT1L_THSD4",
+            "Ex.L5.VAT1L_EYA4",
+        ],
+        "target_name": "Ex_L5_VAT1L_plus",
+        "reference_name": "Nearby_nonvulnerable_Ex_L4L5_L5_L5L6",
+    },
+}
+
+
+# ============================================================
+# Active jobs
+# ============================================================
+
+ACTIVE_JOBS = []
+
+for contrast, cfg0 in CONTRASTS.items():
+    for rep in cfg0["reps"]:
+        ACTIVE_JOBS.append((rep, contrast))
+
+
+# ============================================================
+# Output path functions
+# ============================================================
+
+def pb_counts(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_counts.tsv"
+
+
+def pb_meta(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_meta.tsv"
+
+
+def pb_summary(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_summary.txt"
+
+
+def pb_runinfo(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_run_info.json"
+
+
+def pb_donor_qc_summary(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_donor_qc_summary.tsv"
+
+
+def pb_donor_qc_detail(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_donor_qc_detail.tsv"
+
+
+def pb_donor_qc_txt(rep, contrast):
+    return f"{PB_DIR}/{rep}/{contrast}/{contrast}_donor_qc_report.txt"
+
+
+def deg_file(rep, contrast, suffix):
+    return f"{DEG_DIR}/{rep}/{contrast}/{contrast}_{suffix}"
+
+
+def go_file(rep, contrast, suffix):
+    return f"{GO_DIR}/{rep}/{contrast}/{contrast}_{suffix}"
+
+
+PB_DONOR_QC_ALL = f"{RESULTS_DIR}/pseudobulk_donor_qc_all.tsv"
+
+PB_DONOR_QC_SUMMARIES = [
+    pb_donor_qc_summary(rep, contrast)
+    for rep, contrast in ACTIVE_JOBS
+]
+
+
+ALL_OUTPUTS = []
+
+for rep, contrast in ACTIVE_JOBS:
+    ALL_OUTPUTS.extend([
+        pb_counts(rep, contrast),
+        pb_meta(rep, contrast),
+        pb_summary(rep, contrast),
+        pb_runinfo(rep, contrast),
+
+        pb_donor_qc_summary(rep, contrast),
+        pb_donor_qc_detail(rep, contrast),
+        pb_donor_qc_txt(rep, contrast),
+
+        deg_file(rep, contrast, "edgeR.tsv"),
+        deg_file(rep, contrast, "edgeR.sig.tsv"),
+        deg_file(rep, contrast, "edgeR.up.tsv"),
+        deg_file(rep, contrast, "edgeR.down.tsv"),
+
+        go_file(rep, contrast, "GO_BP_up.tsv"),
+        go_file(rep, contrast, "GO_BP_down.tsv"),
+        go_file(rep, contrast, "GO_BP_top_terms.pdf"),
+        go_file(rep, contrast, "GO_BP_top_terms.png"),
+    ])
+
+ALL_OUTPUTS.append(PB_DONOR_QC_ALL)
+
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+def get_h5ad(wc):
+    return filespath[wc.rep]
+
+
+def cfg(wc):
+    return CONTRASTS[wc.contrast]
+
+
+def get_target_types(wc):
+    return " ".join(cfg(wc)["target_types"])
+
+
+def get_reference_part(wc):
+    c = cfg(wc)
+
+    if len(c.get("reference_types", [])) > 0:
+        return "--reference-types " + " ".join(c["reference_types"])
+
+    if c.get("reference_prefix", "") != "":
+        return "--reference-prefix " + c["reference_prefix"]
+
+    return ""
+
+
+def get_reference_prefixes_part(wc):
+    c = cfg(wc)
+
+    if len(c.get("reference_prefixes", [])) > 0:
+        return "--reference-prefixes " + " ".join(c["reference_prefixes"])
+
+    return ""
+
+
+def get_reference_exclude_part(wc):
+    c = cfg(wc)
+
+    if len(c.get("reference_exclude", [])) > 0:
+        return "--reference-exclude " + " ".join(c["reference_exclude"])
+
+    return ""
+
+
+# ============================================================
+# Final outputs
+# ============================================================
+
+rule all:
+    input:
+        ALL_OUTPUTS
+
+
+# ============================================================
+# 1. Build pseudo-bulk
+# ============================================================
+
+rule build_pseudobulk:
+    input:
+        h5ad=get_h5ad
+    output:
+        counts=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_counts.tsv",
+        meta=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_meta.tsv",
+        summary=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_summary.txt",
+        runinfo=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_run_info.json"
+    params:
+        outdir=lambda wc: f"{PB_DIR}/{wc.rep}/{wc.contrast}",
+        analysis_name=lambda wc: wc.contrast,
+        celltype_col="Org_celltype",
+        sample_col="Sample_ID",
+        layer="X",
+        target_types=get_target_types,
+        reference_part=get_reference_part,
+        reference_prefixes_part=get_reference_prefixes_part,
+        reference_exclude_part=get_reference_exclude_part,
+        target_name=lambda wc: cfg(wc)["target_name"],
+        reference_name=lambda wc: cfg(wc)["reference_name"],
+    log:
+        f"{LOG_DIR}/pseudobulk/{{rep}}_{{contrast}}.log"
+    shell:
+        r"""
+        mkdir -p {params.outdir} $(dirname {log})
+
+        {PYTHON} {PB_SCRIPT} \
+            --input-h5ad {input.h5ad} \
+            --outdir {params.outdir} \
+            --celltype-col {params.celltype_col} \
+            --sample-col {params.sample_col} \
+            --layer {params.layer} \
+            --target-types {params.target_types} \
+            {params.reference_part} \
+            {params.reference_prefixes_part} \
+            {params.reference_exclude_part} \
+            --target-name {params.target_name} \
+            --reference-name {params.reference_name} \
+            --paired \
+            --min-cells {MIN_CELLS} \
+            --analysis-name {params.analysis_name} \
+            > {log} 2>&1
+        """
+
+
+# ============================================================
+# 1.5 Summarize pseudo-bulk donor information
+# ============================================================
+
+rule summarize_pseudobulk_donors:
+    input:
+        counts=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_counts.tsv",
+        meta=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_meta.tsv"
+    output:
+        summary=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_donor_qc_summary.tsv",
+        detail=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_donor_qc_detail.tsv",
+        txt=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_donor_qc_report.txt"
+    params:
+        sample_col="Sample_ID",
+        group_col="group",
+        target_group=lambda wc: cfg(wc)["target_name"],
+        reference_group=lambda wc: cfg(wc)["reference_name"],
+    log:
+        f"{LOG_DIR}/pseudobulk_qc/{{rep}}_{{contrast}}.log"
+    shell:
+        r"""
+        mkdir -p $(dirname {output.summary}) $(dirname {log})
+
+        {PYTHON} {QC_SCRIPT} \
+            --meta {input.meta} \
+            --counts {input.counts} \
+            --out-summary {output.summary} \
+            --out-donor-detail {output.detail} \
+            --out-txt {output.txt} \
+            --rep {wildcards.rep} \
+            --contrast {wildcards.contrast} \
+            --sample-col {params.sample_col} \
+            --group-col {params.group_col} \
+            --target-group {params.target_group} \
+            --reference-group {params.reference_group} \
+            --min-cells {MIN_CELLS} \
+            > {log} 2>&1
+        """
+
+
+# ============================================================
+# 1.6 Combine all pseudo-bulk donor QC summaries
+# ============================================================
+
+rule combine_pseudobulk_donor_qc:
+    input:
+        summaries=PB_DONOR_QC_SUMMARIES
+    output:
+        all_summary=PB_DONOR_QC_ALL
+    params:
+        files=lambda wc, input: " ".join(input.summaries)
+    shell:
+        r"""
+        {PYTHON} - <<'PY'
+import pandas as pd
+
+files = "{params.files}".split()
+dfs = []
+
+for fp in files:
+    df = pd.read_csv(fp, sep="\t")
+    dfs.append(df)
+
+out = pd.concat(dfs, axis=0, ignore_index=True)
+out.to_csv("{output.all_summary}", sep="\t", index=False)
+
+print("[DONE] combined donor QC:", "{output.all_summary}")
+PY
+        """
+
+
+# ============================================================
+# 2. Run edgeR DEG + GO
+# ============================================================
+
+rule run_deg_go:
+    input:
+        counts=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_counts.tsv",
+        meta=f"{PB_DIR}/{{rep}}/{{contrast}}/{{contrast}}_meta.tsv"
+    output:
+        deg=f"{DEG_DIR}/{{rep}}/{{contrast}}/{{contrast}}_edgeR.tsv",
+        deg_sig=f"{DEG_DIR}/{{rep}}/{{contrast}}/{{contrast}}_edgeR.sig.tsv",
+        deg_up=f"{DEG_DIR}/{{rep}}/{{contrast}}/{{contrast}}_edgeR.up.tsv",
+        deg_down=f"{DEG_DIR}/{{rep}}/{{contrast}}/{{contrast}}_edgeR.down.tsv",
+        go_up=f"{GO_DIR}/{{rep}}/{{contrast}}/{{contrast}}_GO_BP_up.tsv",
+        go_down=f"{GO_DIR}/{{rep}}/{{contrast}}/{{contrast}}_GO_BP_down.tsv",
+        go_top_pdf=f"{GO_DIR}/{{rep}}/{{contrast}}/{{contrast}}_GO_BP_top_terms.pdf",
+        go_top_png=f"{GO_DIR}/{{rep}}/{{contrast}}/{{contrast}}_GO_BP_top_terms.png"
+    params:
+        deg_outdir=lambda wc: f"{DEG_DIR}/{wc.rep}/{wc.contrast}",
+        prefix=lambda wc: wc.contrast,
+        sample_col="Sample_ID",
+        group_col="group",
+        ref_group=lambda wc: cfg(wc)["reference_name"],
+        target_group=lambda wc: cfg(wc)["target_name"],
+    log:
+        f"{LOG_DIR}/DEG_GO/{{rep}}_{{contrast}}.log"
+    shell:
+        r"""
+        mkdir -p {params.deg_outdir} $(dirname {log})
+
+        {R_BIN} {R_SCRIPT} \
+          --counts {input.counts} \
+          --meta {input.meta} \
+          --outdir {params.deg_outdir} \
+          --prefix {params.prefix} \
+          --sample-col {params.sample_col} \
+          --group-col {params.group_col} \
+          --ref-group {params.ref_group} \
+          --target-group {params.target_group} \
+          --paired \
+          --fdr-cutoff 0.05 \
+          --lfc-cutoff 0.25 \
+          --go-ont BP \
+          --plot-top-n 10 \
+          > {log} 2>&1
+
+        if [ -f {params.deg_outdir}/{params.prefix}_GO_BP_up.tsv ]; then
+            mv {params.deg_outdir}/{params.prefix}_GO_BP_up.tsv {output.go_up}
+        else
+            touch {output.go_up}
+        fi
+
+        if [ -f {params.deg_outdir}/{params.prefix}_GO_BP_down.tsv ]; then
+            mv {params.deg_outdir}/{params.prefix}_GO_BP_down.tsv {output.go_down}
+        else
+            touch {output.go_down}
+        fi
+
+        if [ -f {params.deg_outdir}/{params.prefix}_GO_BP_top_terms.pdf ]; then
+            mv {params.deg_outdir}/{params.prefix}_GO_BP_top_terms.pdf {output.go_top_pdf}
+        else
+            touch {output.go_top_pdf}
+        fi
+
+        if [ -f {params.deg_outdir}/{params.prefix}_GO_BP_top_terms.png ]; then
+            mv {params.deg_outdir}/{params.prefix}_GO_BP_top_terms.png {output.go_top_png}
+        else
+            touch {output.go_top_png}
+        fi
+        """
