@@ -1,0 +1,68 @@
+
+
+import os
+import pandas as pd
+
+BASE_DIR = os.getcwd()
+CONFIG = os.path.join(BASE_DIR, "config", "existing_go_plot_config.tsv")
+OUTDIR = os.path.join(BASE_DIR, "results", "plots")
+COMPACT_OUTDIR = os.path.join(BASE_DIR, "results", "plots")
+LOGDIR = os.path.join(BASE_DIR, "results", "logs")
+SCRIPT = os.path.join(BASE_DIR, "scripts", "plot_existing_region_go_dotplot.R")
+COMPACT_SCRIPT = os.path.join(BASE_DIR, "scripts", "plot_all_subtype_go_compact_matrix.R")
+COMPACT_PREFIX = os.path.join(COMPACT_OUTDIR, "all_vulnerable_subtypes_GO_compact_matrix")
+
+# Rscript path. Change this if needed.
+RSCRIPT = "/mnt/workspace/tools/envs/r-base2/bin/Rscript"
+if not os.path.exists(RSCRIPT):
+    RSCRIPT = "Rscript"
+
+cfg = pd.read_csv(CONFIG, sep="\t", dtype=str).fillna("")
+CONTRASTS = cfg["contrast"].tolist()
+
+rule all:
+    input:
+        expand(os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot.pdf"), contrast=CONTRASTS),
+        expand(os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot.png"), contrast=CONTRASTS),
+        expand(os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot_data.tsv"), contrast=CONTRASTS),
+        COMPACT_PREFIX + ".pdf",
+        COMPACT_PREFIX + ".png",
+        COMPACT_PREFIX + ".selected_GO_long.tsv"
+
+rule plot_existing_go:
+    output:
+        pdf = os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot.pdf"),
+        png = os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot.png"),
+        data = os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot_data.tsv")
+    log:
+        os.path.join(LOGDIR, "plot_GO", "{contrast}.log")
+    shell:
+        r"""
+        mkdir -p {OUTDIR} $(dirname {log})
+
+        {RSCRIPT} {SCRIPT} \
+          --config {CONFIG} \
+          --contrast {wildcards.contrast} \
+          --outdir {OUTDIR} \
+          > {log} 2>&1
+        """
+
+rule plot_compact_go_matrix:
+    input:
+        data = expand(os.path.join(OUTDIR, "{contrast}_PFC_vs_MCX_GO_bias_dotplot_data.tsv"), contrast=CONTRASTS)
+    output:
+        pdf = COMPACT_PREFIX + ".pdf",
+        png = COMPACT_PREFIX + ".png",
+        data = COMPACT_PREFIX + ".selected_GO_long.tsv"
+    log:
+        os.path.join(LOGDIR, "plot_GO", "all_vulnerable_subtypes_GO_compact_matrix.log")
+    shell:
+        r"""
+        mkdir -p {COMPACT_OUTDIR} $(dirname {log})
+
+        {RSCRIPT} {COMPACT_SCRIPT} \
+          --config {CONFIG} \
+          --input-dir {OUTDIR} \
+          --out-prefix {COMPACT_PREFIX} \
+          > {log} 2>&1
+        """
